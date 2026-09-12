@@ -1,8 +1,9 @@
 """Chess board implementation using PyQt6."""
 
 import sys
+from typing import List, Optional, Tuple
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt
-from PyQt6.QtGui import QColor, QPainter, QPaintEvent, QResizeEvent
+from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPen, QResizeEvent
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget
 from pieces import BoardPieces
 
@@ -20,6 +21,28 @@ class ChessBoardWidget(QWidget):
 
         # Pieces placement and state
         self.pieces = BoardPieces()
+
+        # Selection and movement state
+        self.selected_square: Optional[Tuple[int, int]] = None
+        self.valid_moves: List[Tuple[int, int]] = []
+
+    def get_board_geometry(self) -> Tuple[float, float, float]:
+        """Calculates inner board top-left (inner_x, inner_y) and square_size for current dimensions."""
+        width = self.width()
+        height = self.height()
+        board_total_size = min(width, height)
+        if board_total_size <= 0:
+            return 0.0, 0.0, 0.0
+        offset_x = (width - board_total_size) / 2.0
+        offset_y = (height - board_total_size) / 2.0
+        border_thickness = max(4.0, board_total_size * 0.035)
+        inner_board_size = board_total_size - (2.0 * border_thickness)
+        if inner_board_size <= 0:
+            return 0.0, 0.0, 0.0
+        square_size = inner_board_size / 8.0
+        inner_x = offset_x + border_thickness
+        inner_y = offset_y + border_thickness
+        return inner_x, inner_y, square_size
 
     def sizeHint(self) -> QSize:
         """Returns the recommended default starting size for this widget.
@@ -41,15 +64,62 @@ class ChessBoardWidget(QWidget):
     def resizeEvent(self, event: QResizeEvent) -> None:
         """Recalculates piece sprite dimensions to match the updated board geometry on window resize."""
         super().resizeEvent(event)
-        width = self.width()
-        height = self.height()
-        board_total_size = min(width, height)
-        if board_total_size > 0:
-            border_thickness = max(4.0, board_total_size * 0.035)
-            inner_board_size = board_total_size - (2.0 * border_thickness)
-            if inner_board_size > 0:
-                square_size = inner_board_size / 8.0
-                self.pieces.update_size(max(1, round(square_size)))
+        _, _, square_size = self.get_board_geometry()
+        if square_size > 0:
+            self.pieces.update_size(max(1, round(square_size)))
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        """Handles mouse clicks to select pieces and execute moves."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            inner_x, inner_y, square_size = self.get_board_geometry()
+            if square_size <= 0:
+                return
+            pos = event.position()
+            x, y = pos.x(), pos.y()
+            if inner_x <= x < inner_x + 8 * square_size and inner_y <= y < inner_y + 8 * square_size:
+                col = int((x - inner_x) // square_size)
+                row = int((y - inner_y) // square_size)
+                self.handle_square_clicked(row, col)
+            else:
+                # Clicked outside the board boundary: deselect
+                self.selected_square = None
+                self.valid_moves = []
+                self.update()
+        elif event.button() == Qt.MouseButton.RightButton:
+            # Right click cancels active selection
+            self.selected_square = None
+            self.valid_moves = []
+            self.update()
+
+    def handle_square_clicked(self, row: int, col: int) -> None:
+        """Processes a click on square (row, col) to select, move, or switch piece."""
+        if self.selected_square is None:
+            # Select piece if present
+            piece = self.pieces.get_piece(row, col)
+            if piece is not None:
+                self.selected_square = (row, col)
+                self.valid_moves = self.pieces.get_valid_moves(row, col)
+                self.update()
+        else:
+            sel_row, sel_col = self.selected_square
+            if (row, col) in self.valid_moves:
+                # Execute move to valid destination square
+                self.pieces.move_piece(sel_row, sel_col, row, col)
+                self.selected_square = None
+                self.valid_moves = []
+                self.update()
+            else:
+                clicked_piece = self.pieces.get_piece(row, col)
+                if clicked_piece is not None and (row, col) != self.selected_square:
+                    # Switch selection to newly clicked piece
+                    self.selected_square = (row, col)
+                    self.valid_moves = self.pieces.get_valid_moves(row, col)
+                    self.update()
+                else:
+                    # Clicked invalid empty square or same square -> deselect
+                    self.selected_square = None
+                    self.valid_moves = []
+                    self.update()
 
     def paintEvent(self, event: QPaintEvent) -> None:
         """Paints the 8x8 chessboard with border, centered and preserving aspect ratio."""
@@ -62,31 +132,17 @@ class ChessBoardWidget(QWidget):
         # Fill overall widget background (letterbox / pillarbox areas)
         painter.fillRect(0, 0, width, height, self.background_color)
 
-        # Determine largest square board that fits within the current widget dimensions
-        board_total_size = min(width, height)
-        if board_total_size <= 0:
+        inner_x, inner_y, square_size = self.get_board_geometry()
+        if square_size <= 0:
             return
 
-        # Calculate offsets to center the square chessboard in the widget
+        board_total_size = min(width, height)
         offset_x = (width - board_total_size) / 2.0
         offset_y = (height - board_total_size) / 2.0
-
-        # Border thickness is proportional to board size (e.g. ~3.5% of total size)
-        border_thickness = max(4.0, board_total_size * 0.035)
 
         # Draw outer brown border
         border_rect = QRectF(offset_x, offset_y, board_total_size, board_total_size)
         painter.fillRect(border_rect, self.border_color)
-
-        # Dimensions of the inner 8x8 chessboard
-        inner_x = offset_x + border_thickness
-        inner_y = offset_y + border_thickness
-        inner_board_size = board_total_size - (2.0 * border_thickness)
-
-        if inner_board_size <= 0:
-            return
-
-        square_size = inner_board_size / 8.0
 
         # Draw the 8x8 alternating squares
         for row in range(8):
@@ -102,8 +158,42 @@ class ChessBoardWidget(QWidget):
                 square_rect = QRectF(sq_x, sq_y, square_size, square_size)
                 painter.fillRect(square_rect, color)
 
+        # Draw highlight on selected square
+        if self.selected_square is not None:
+            sel_row, sel_col = self.selected_square
+            sq_x = inner_x + sel_col * square_size
+            sq_y = inner_y + sel_row * square_size
+            painter.fillRect(QRectF(sq_x, sq_y, square_size, square_size), QColor(215, 205, 100, 110))
+
         # Draw pieces on top of the squares
         self.pieces.draw(painter, inner_x, inner_y, square_size)
+
+        # Draw light gray dots for valid move target squares
+        if self.valid_moves:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            for m_row, m_col in self.valid_moves:
+                center_x = inner_x + (m_col + 0.5) * square_size
+                center_y = inner_y + (m_row + 0.5) * square_size
+                target_piece = self.pieces.get_piece(m_row, m_col)
+
+                if target_piece is None:
+                    # Empty square: solid light gray dot
+                    dot_radius = square_size * 0.16
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(QColor(170, 170, 170, 200))
+                    painter.drawEllipse(QPointF(center_x, center_y), dot_radius, dot_radius)
+                else:
+                    # Capture square: light gray dot with outline and ring for high visibility over pieces
+                    ring_radius = square_size * 0.42
+                    pen_width = max(2.0, square_size * 0.07)
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.setPen(QPen(QColor(190, 190, 190, 210), pen_width))
+                    painter.drawEllipse(QPointF(center_x, center_y), ring_radius, ring_radius)
+
+                    dot_radius = square_size * 0.18
+                    painter.setPen(QPen(QColor(40, 40, 40, 160), max(1.5, square_size * 0.025)))
+                    painter.setBrush(QColor(210, 210, 210, 230))
+                    painter.drawEllipse(QPointF(center_x, center_y), dot_radius, dot_radius)
 
 
 class ChessWindow(QMainWindow):
