@@ -181,6 +181,15 @@ class BoardPieces:
 
         return captured
 
+    def promote_pawn(self, row: int, col: int, piece_type: PieceType) -> Piece:
+        """Transforms the pawn at (row, col) into the specified piece_type."""
+        current_piece = self.get_piece(row, col)
+        color = current_piece.color if current_piece else PieceColor.WHITE
+        new_piece = Piece(color, piece_type)
+        new_piece.has_moved = True
+        self.set_piece(row, col, new_piece)
+        return new_piece
+
     def _get_en_passant_moves(self, row: int, col: int) -> List[Tuple[int, int]]:
         """Returns valid en passant capture target squares for a pawn at (row, col)."""
         piece = self.get_piece(row, col)

@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> None:
 
     args = parse_args(argv if argv is not None else sys.argv[1:])
 
-    app = QApplication(sys.argv)
+    app = QApplication.instance() or QApplication(sys.argv)
     window = ChessWindow(free_move=args.free_move)
     window.show()
     sys.exit(app.exec())

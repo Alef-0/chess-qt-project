@@ -19,15 +19,6 @@ from board import ChessBoardWidget, ChessWindow
 from main import parse_args
 
 
-@pytest.fixture(scope="session")
-def qapp():
-    """Ensure a single QApplication instance exists for widget testing."""
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    return app
-
-
 def create_empty_board() -> BoardPieces:
     """Helper to create a board with no pieces."""
     board = BoardPieces()

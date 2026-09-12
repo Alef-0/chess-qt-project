@@ -6,8 +6,10 @@ import sys
 from typing import List, Optional, Tuple
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt
 from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPen, QPolygonF, QResizeEvent
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget
-from pieces import BoardPieces, PieceColor
+from PyQt6.QtWidgets import QApplication, QMainWindow, QMessageBox, QWidget
+from pieces import BoardPieces, PieceColor, PieceType
+from check_mate import find_king, is_in_check, is_checkmate, get_legal_moves, move_leads_to_mate
+from promotion import prompt_promotion
 
 
 class ChessBoardWidget(QWidget):
@@ -31,6 +33,7 @@ class ChessBoardWidget(QWidget):
         # Turn management: turn is enabled by default, --free-move disables it
         self.current_turn: PieceColor = PieceColor.WHITE
         self.turn_enabled: bool = not free_move
+        self.game_over: bool = False
 
     def get_board_geometry(self) -> Tuple[float, float, float]:
         """Calculates inner board top-left (inner_x, inner_y) and square_size for current dimensions."""
@@ -76,6 +79,9 @@ class ChessBoardWidget(QWidget):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """Handles mouse clicks to select pieces and execute moves."""
+        if self.game_over:
+            return
+
         if event.button() == Qt.MouseButton.LeftButton:
             inner_x, inner_y, square_size = self.get_board_geometry()
             if square_size <= 0:
@@ -99,6 +105,9 @@ class ChessBoardWidget(QWidget):
 
     def handle_square_clicked(self, row: int, col: int) -> None:
         """Processes a click on square (row, col) to select, move, or switch piece."""
+        if self.game_over:
+            return
+
         if self.selected_square is None:
             # Select piece if present and belongs to current turn
             piece = self.pieces.get_piece(row, col)
@@ -106,19 +115,79 @@ class ChessBoardWidget(QWidget):
                 if self.turn_enabled and piece.color != self.current_turn:
                     return
                 self.selected_square = (row, col)
-                self.valid_moves = self.pieces.get_valid_moves(row, col)
+                if self.turn_enabled:
+                    self.valid_moves = get_legal_moves(self.pieces, row, col)
+                else:
+                    self.valid_moves = self.pieces.get_valid_moves(row, col)
                 self.update()
         else:
             sel_row, sel_col = self.selected_square
             if (row, col) in self.valid_moves:
+                moving_piece = self.pieces.get_piece(sel_row, sel_col)
+                if moving_piece is None:
+                    return
+
+                # Check if this move is a pawn reaching the opposite side (promotion)
+                is_promotion = (
+                    moving_piece.piece_type == PieceType.PAWN
+                    and ((moving_piece.color == PieceColor.WHITE and row == 0) or
+                         (moving_piece.color == PieceColor.BLACK and row == 7))
+                )
+                promoted_type: Optional[PieceType] = None
+                if is_promotion:
+                    promoted_type = prompt_promotion(moving_piece.color, self)
+
+                if not self.turn_enabled:
+                    # Free move mode: check if this move leads to a mate (specifically for chosen promoted piece)
+                    leads_to_mate, winner = move_leads_to_mate(
+                        self.pieces, sel_row, sel_col, row, col, promotion=promoted_type
+                    )
+                    if leads_to_mate:
+                        reply = QMessageBox.question(
+                            self,
+                            "End game?",
+                            "End game?",
+                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                            QMessageBox.StandardButton.No,
+                        )
+                        if reply != QMessageBox.StandardButton.Yes:
+                            self.selected_square = None
+                            self.valid_moves = []
+                            self.update()
+                            return
+                        else:
+                            self.pieces.move_piece(sel_row, sel_col, row, col)
+                            if is_promotion and promoted_type is not None:
+                                self.pieces.promote_pawn(row, col, promoted_type)
+                            self.selected_square = None
+                            self.valid_moves = []
+                            self.game_over = True
+                            self.update()
+                            winner_name = winner.name if winner else "WHITE"
+                            QMessageBox.information(self, "Game Over", f"{winner_name} WON")
+                            return
+
                 # Execute move to valid destination square
                 self.pieces.move_piece(sel_row, sel_col, row, col)
+                if is_promotion and promoted_type is not None:
+                    self.pieces.promote_pawn(row, col, promoted_type)
+
                 self.selected_square = None
                 self.valid_moves = []
+
+                # In turn-based mode, check if opposite king is in check or checkmate
+                opp_color = (
+                    PieceColor.BLACK if moving_piece.color == PieceColor.WHITE else PieceColor.WHITE
+                )
+                if is_in_check(self.pieces, opp_color):
+                    if is_checkmate(self.pieces, opp_color):
+                        self.game_over = True
+                        self.update()
+                        QMessageBox.information(self, "Game Over", f"{moving_piece.color.name} WON")
+                        return
+
                 if self.turn_enabled:
-                    self.current_turn = (
-                        PieceColor.BLACK if self.current_turn == PieceColor.WHITE else PieceColor.WHITE
-                    )
+                    self.current_turn = opp_color
                 self.update()
             else:
                 clicked_piece = self.pieces.get_piece(row, col)
@@ -129,7 +198,10 @@ class ChessBoardWidget(QWidget):
                 ):
                     # Switch selection to newly clicked piece of current turn
                     self.selected_square = (row, col)
-                    self.valid_moves = self.pieces.get_valid_moves(row, col)
+                    if self.turn_enabled:
+                        self.valid_moves = get_legal_moves(self.pieces, row, col)
+                    else:
+                        self.valid_moves = self.pieces.get_valid_moves(row, col)
                     self.update()
                 else:
                     # Clicked invalid empty square, opponent piece, or same square -> deselect
@@ -173,6 +245,19 @@ class ChessBoardWidget(QWidget):
 
                 square_rect = QRectF(sq_x, sq_y, square_size, square_size)
                 painter.fillRect(square_rect, color)
+
+        # Highlight kings in check on a red square
+        for color in (PieceColor.WHITE, PieceColor.BLACK):
+            if is_in_check(self.pieces, color):
+                k_pos = find_king(self.pieces, color)
+                if k_pos is not None:
+                    k_row, k_col = k_pos
+                    sq_x = inner_x + k_col * square_size
+                    sq_y = inner_y + k_row * square_size
+                    painter.fillRect(
+                        QRectF(sq_x, sq_y, square_size, square_size),
+                        QColor(225, 45, 45, 220),
+                    )
 
         # Draw highlight on selected square
         if self.selected_square is not None:
