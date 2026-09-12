@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chess-qt"
+version = "0.1.0"
+description = "A chess game built from scratch using Python and PyQt6"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Alef-0", email = "alefgabryel123@gmail.com" }
+]
+dependencies = [
+    "PyQt6>=6.5.0",
+    "Pillow>=10.0.0",
+]
