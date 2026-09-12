@@ -1,5 +1,7 @@
 """Main entry point for the Chess game application."""
 
+import argparse
+import signal
 import sys
 from pathlib import Path
 
@@ -12,10 +14,27 @@ from PyQt6.QtWidgets import QApplication
 from board import ChessWindow
 
 
-def main() -> None:
+def parse_args(args: list[str] | None = None) -> argparse.Namespace:
+    """Parses command line arguments."""
+    parser = argparse.ArgumentParser(description="Chess game application")
+    parser.add_argument(
+        "--free-move",
+        action="store_true",
+        help="Disable turn enforcement to allow free movement of pieces.",
+    )
+    parsed_args, _ = parser.parse_known_args(args)
+    return parsed_args
+
+
+def main(argv: list[str] | None = None) -> None:
     """Initializes and runs the Chess application."""
+    # Activate signal handler so that Ctrl+C finishes the program
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+    args = parse_args(argv if argv is not None else sys.argv[1:])
+
     app = QApplication(sys.argv)
-    window = ChessWindow()
+    window = ChessWindow(free_move=args.free_move)
     window.show()
     sys.exit(app.exec())
 

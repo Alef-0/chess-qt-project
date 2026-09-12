@@ -201,10 +201,74 @@ class BoardPieces:
 
         return []
 
+    def is_square_attacked(self, row: int, col: int, by_color: PieceColor) -> bool:
+        """Returns True if the square (row, col) is under attack by any piece of by_color."""
+        # 1. Enemy Pawns
+        pawn_row = row + 1 if by_color == PieceColor.WHITE else row - 1
+        for pawn_col in (col - 1, col + 1):
+            if 0 <= pawn_row < 8 and 0 <= pawn_col < 8:
+                p = self.get_piece(pawn_row, pawn_col)
+                if p is not None and p.color == by_color and p.piece_type == PieceType.PAWN:
+                    return True
+
+        # 2. Enemy Knights
+        knight_offsets = [
+            (-2, -1), (-2, 1),
+            (-1, -2), (-1, 2),
+            (1, -2), (1, 2),
+            (2, -1), (2, 1),
+        ]
+        for dr, dc in knight_offsets:
+            r, c = row + dr, col + dc
+            if 0 <= r < 8 and 0 <= c < 8:
+                p = self.get_piece(r, c)
+                if p is not None and p.color == by_color and p.piece_type == PieceType.KNIGHT:
+                    return True
+
+        # 3. Enemy King (adjacent squares)
+        king_offsets = [
+            (-1, -1), (-1, 0), (-1, 1),
+            (0, -1),           (0, 1),
+            (1, -1),  (1, 0),  (1, 1),
+        ]
+        for dr, dc in king_offsets:
+            r, c = row + dr, col + dc
+            if 0 <= r < 8 and 0 <= c < 8:
+                p = self.get_piece(r, c)
+                if p is not None and p.color == by_color and p.piece_type == PieceType.KING:
+                    return True
+
+        # 4. Orthogonal sliders: Rooks and Queens
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            r, c = row + dr, col + dc
+            while 0 <= r < 8 and 0 <= c < 8:
+                p = self.get_piece(r, c)
+                if p is not None:
+                    if p.color == by_color and p.piece_type in (PieceType.ROOK, PieceType.QUEEN):
+                        return True
+                    break
+                r += dr
+                c += dc
+
+        # 5. Diagonal sliders: Bishops and Queens
+        for dr, dc in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+            r, c = row + dr, col + dc
+            while 0 <= r < 8 and 0 <= c < 8:
+                p = self.get_piece(r, c)
+                if p is not None:
+                    if p.color == by_color and p.piece_type in (PieceType.BISHOP, PieceType.QUEEN):
+                        return True
+                    break
+                r += dr
+                c += dc
+
+        return False
+
     def _get_castling_moves(self, row: int, col: int) -> List[Tuple[int, int]]:
         """Returns valid castling destination squares for a king at (row, col).
 
-        Validates that neither king nor rook has moved, and intermediate squares are clear.
+        Validates that neither king nor rook has moved, intermediate squares are clear,
+        and that the king is not in check, does not pass through check, and does not land in check.
         """
         king = self.get_piece(row, col)
         if king is None or king.piece_type != PieceType.KING or king.has_moved:
@@ -212,6 +276,12 @@ class BoardPieces:
 
         expected_row = 7 if king.color == PieceColor.WHITE else 0
         if row != expected_row or col != 4:
+            return []
+
+        enemy_color = PieceColor.BLACK if king.color == PieceColor.WHITE else PieceColor.WHITE
+
+        # King cannot castle out of check
+        if self.is_square_attacked(row, 4, enemy_color):
             return []
 
         moves: List[Tuple[int, int]] = []
@@ -224,7 +294,12 @@ class BoardPieces:
             and kingside_rook.color == king.color
             and not kingside_rook.has_moved
         ):
-            if self.get_piece(row, 5) is None and self.get_piece(row, 6) is None:
+            if (
+                self.get_piece(row, 5) is None
+                and self.get_piece(row, 6) is None
+                and not self.is_square_attacked(row, 5, enemy_color)
+                and not self.is_square_attacked(row, 6, enemy_color)
+            ):
                 moves.append((row, 6))
 
         # Queenside castling (col 4 -> col 2, rook at col 0)
@@ -239,6 +314,8 @@ class BoardPieces:
                 self.get_piece(row, 1) is None
                 and self.get_piece(row, 2) is None
                 and self.get_piece(row, 3) is None
+                and not self.is_square_attacked(row, 3, enemy_color)
+                and not self.is_square_attacked(row, 2, enemy_color)
             ):
                 moves.append((row, 2))
 

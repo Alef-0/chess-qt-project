@@ -15,7 +15,8 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt6.QtWidgets import QApplication
 from pieces import BoardPieces, Piece, PieceColor, PieceType
-from board import ChessBoardWidget
+from board import ChessBoardWidget, ChessWindow
+from main import parse_args
 
 
 @pytest.fixture(scope="session")
@@ -473,6 +474,88 @@ class TestCastlingMovement:
         assert widget.pieces.get_piece(7, 5).piece_type == PieceType.ROOK
         assert widget.pieces.get_piece(7, 7) is None
 
+    def test_castling_prevented_when_king_in_check(self):
+        board = create_empty_board()
+        board.set_piece(7, 4, Piece(PieceColor.WHITE, PieceType.KING))
+        board.set_piece(7, 7, Piece(PieceColor.WHITE, PieceType.ROOK))
+        board.set_piece(7, 0, Piece(PieceColor.WHITE, PieceType.ROOK))
+        # Place enemy rook on e-file delivering check
+        board.set_piece(0, 4, Piece(PieceColor.BLACK, PieceType.ROOK))
+
+        moves = board.get_valid_moves(7, 4)
+        assert (7, 6) not in moves
+        assert (7, 2) not in moves
+
+    def test_kingside_castling_prevented_when_transit_square_attacked(self):
+        board = create_empty_board()
+        board.set_piece(7, 4, Piece(PieceColor.WHITE, PieceType.KING))
+        board.set_piece(7, 7, Piece(PieceColor.WHITE, PieceType.ROOK))
+        # Place enemy rook attacking f1 transit square (7, 5)
+        board.set_piece(0, 5, Piece(PieceColor.BLACK, PieceType.ROOK))
+
+        moves = board.get_valid_moves(7, 4)
+        assert (7, 6) not in moves
+
+    def test_kingside_castling_prevented_when_destination_square_attacked(self):
+        board = create_empty_board()
+        board.set_piece(7, 4, Piece(PieceColor.WHITE, PieceType.KING))
+        board.set_piece(7, 7, Piece(PieceColor.WHITE, PieceType.ROOK))
+        # Place enemy rook attacking g1 destination square (7, 6)
+        board.set_piece(0, 6, Piece(PieceColor.BLACK, PieceType.ROOK))
+
+        moves = board.get_valid_moves(7, 4)
+        assert (7, 6) not in moves
+
+    def test_queenside_castling_prevented_when_transit_square_attacked(self):
+        board = create_empty_board()
+        board.set_piece(7, 4, Piece(PieceColor.WHITE, PieceType.KING))
+        board.set_piece(7, 0, Piece(PieceColor.WHITE, PieceType.ROOK))
+        # Place enemy rook attacking d1 transit square (7, 3)
+        board.set_piece(0, 3, Piece(PieceColor.BLACK, PieceType.ROOK))
+
+        moves = board.get_valid_moves(7, 4)
+        assert (7, 2) not in moves
+
+    def test_queenside_castling_prevented_when_destination_square_attacked(self):
+        board = create_empty_board()
+        board.set_piece(7, 4, Piece(PieceColor.WHITE, PieceType.KING))
+        board.set_piece(7, 0, Piece(PieceColor.WHITE, PieceType.ROOK))
+        # Place enemy rook attacking c1 destination square (7, 2)
+        board.set_piece(0, 2, Piece(PieceColor.BLACK, PieceType.ROOK))
+
+        moves = board.get_valid_moves(7, 4)
+        assert (7, 2) not in moves
+
+    def test_queenside_castling_allowed_when_b1_attacked(self):
+        board = create_empty_board()
+        board.set_piece(7, 4, Piece(PieceColor.WHITE, PieceType.KING))
+        board.set_piece(7, 0, Piece(PieceColor.WHITE, PieceType.ROOK))
+        # Place enemy rook attacking b1 square (7, 1) - king does not cross or land on b1
+        board.set_piece(0, 1, Piece(PieceColor.BLACK, PieceType.ROOK))
+
+        moves = board.get_valid_moves(7, 4)
+        assert (7, 2) in moves
+
+    def test_kingside_castling_allowed_when_rook_under_attack(self):
+        board = create_empty_board()
+        board.set_piece(7, 4, Piece(PieceColor.WHITE, PieceType.KING))
+        board.set_piece(7, 7, Piece(PieceColor.WHITE, PieceType.ROOK))
+        # Place enemy rook attacking h1 square (7, 7) - rook under attack does not prevent castling
+        board.set_piece(0, 7, Piece(PieceColor.BLACK, PieceType.ROOK))
+
+        moves = board.get_valid_moves(7, 4)
+        assert (7, 6) in moves
+
+    def test_black_castling_prevented_by_diagonal_attack(self):
+        board = create_empty_board()
+        board.set_piece(0, 4, Piece(PieceColor.BLACK, PieceType.KING))
+        board.set_piece(0, 7, Piece(PieceColor.BLACK, PieceType.ROOK))
+        # Place white bishop attacking (0, 5) diagonally from (4, 1)
+        board.set_piece(4, 1, Piece(PieceColor.WHITE, PieceType.BISHOP))
+
+        moves = board.get_valid_moves(0, 4)
+        assert (0, 6) not in moves
+
 
 class TestMoveCategories:
     def test_move_category_classification(self):
@@ -528,4 +611,77 @@ class TestMoveCategories:
         assert widget.selected_square is None
         # Back to White's turn
         assert widget.current_turn == PieceColor.WHITE
+
+
+class TestFreeMoveAndSignals:
+    def test_free_move_in_widget(self, qapp):
+        widget = ChessBoardWidget(free_move=True)
+        assert widget.turn_enabled is False
+
+        # Black can move on move 1
+        widget.handle_square_clicked(1, 3)
+        assert widget.selected_square == (1, 3)
+        widget.handle_square_clicked(3, 3)
+        assert widget.selected_square is None
+        assert widget.pieces.get_piece(3, 3).color == PieceColor.BLACK
+
+        # Black can move AGAIN on move 2 (turn is disabled)
+        widget.handle_square_clicked(1, 4)
+        assert widget.selected_square == (1, 4)
+        widget.handle_square_clicked(3, 4)
+        assert widget.selected_square is None
+        assert widget.pieces.get_piece(3, 4).color == PieceColor.BLACK
+
+        # White can also move
+        widget.handle_square_clicked(6, 4)
+        assert widget.selected_square == (6, 4)
+        widget.handle_square_clicked(4, 4)
+        assert widget.selected_square is None
+        assert widget.pieces.get_piece(4, 4).color == PieceColor.WHITE
+
+        # White can move AGAIN
+        widget.handle_square_clicked(6, 3)
+        assert widget.selected_square == (6, 3)
+        widget.handle_square_clicked(4, 3)
+        assert widget.selected_square is None
+        assert widget.pieces.get_piece(4, 3).color == PieceColor.WHITE
+
+    def test_free_move_piece_switching(self, qapp):
+        widget = ChessBoardWidget(free_move=True)
+        # Select white knight at (7, 1)
+        widget.handle_square_clicked(7, 1)
+        assert widget.selected_square == (7, 1)
+
+        # Click black knight at (0, 1) -> switches selection directly to black knight
+        widget.handle_square_clicked(0, 1)
+        assert widget.selected_square == (0, 1)
+
+    def test_default_turn_enabled(self, qapp):
+        widget = ChessBoardWidget()
+        assert widget.turn_enabled is True
+
+    def test_chess_window_free_move(self, qapp):
+        window = ChessWindow(free_move=True)
+        assert window.board_widget.turn_enabled is False
+
+    def test_parse_args_free_move_flag(self):
+        args = parse_args([])
+        assert args.free_move is False
+
+        args = parse_args(["--free-move"])
+        assert args.free_move is True
+
+    def test_signal_handler_configured(self):
+        import signal
+        from main import main
+        from unittest.mock import patch
+
+        with patch("PyQt6.QtWidgets.QApplication.exec", return_value=0), \
+             patch("PyQt6.QtWidgets.QMainWindow.show"), \
+             pytest.raises(SystemExit) as exc_info:
+            main(["--free-move"])
+
+        assert exc_info.value.code == 0
+        assert signal.getsignal(signal.SIGINT) == signal.SIG_DFL
+
 

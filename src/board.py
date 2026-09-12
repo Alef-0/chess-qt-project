@@ -1,6 +1,7 @@
 """Chess board implementation using PyQt6."""
 
 import math
+import signal
 import sys
 from typing import List, Optional, Tuple
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt
@@ -12,7 +13,7 @@ from pieces import BoardPieces, PieceColor
 class ChessBoardWidget(QWidget):
     """Widget responsible for rendering a resizable 8x8 chessboard while maintaining aspect ratio."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, free_move: bool = False) -> None:
         super().__init__(parent)
         # Colors configured within [50, 225] range to avoid display strain
         self.dark_square_color = QColor(50, 50, 50)       # Minimum brightness bound
@@ -27,9 +28,9 @@ class ChessBoardWidget(QWidget):
         self.selected_square: Optional[Tuple[int, int]] = None
         self.valid_moves: List[Tuple[int, int]] = []
 
-        # Turn management
+        # Turn management: turn is enabled by default, --free-move disables it
         self.current_turn: PieceColor = PieceColor.WHITE
-        self.turn_enforcement: bool = True
+        self.turn_enabled: bool = not free_move
 
     def get_board_geometry(self) -> Tuple[float, float, float]:
         """Calculates inner board top-left (inner_x, inner_y) and square_size for current dimensions."""
@@ -102,7 +103,7 @@ class ChessBoardWidget(QWidget):
             # Select piece if present and belongs to current turn
             piece = self.pieces.get_piece(row, col)
             if piece is not None:
-                if self.turn_enforcement and piece.color != self.current_turn:
+                if self.turn_enabled and piece.color != self.current_turn:
                     return
                 self.selected_square = (row, col)
                 self.valid_moves = self.pieces.get_valid_moves(row, col)
@@ -114,7 +115,7 @@ class ChessBoardWidget(QWidget):
                 self.pieces.move_piece(sel_row, sel_col, row, col)
                 self.selected_square = None
                 self.valid_moves = []
-                if self.turn_enforcement:
+                if self.turn_enabled:
                     self.current_turn = (
                         PieceColor.BLACK if self.current_turn == PieceColor.WHITE else PieceColor.WHITE
                     )
@@ -124,7 +125,7 @@ class ChessBoardWidget(QWidget):
                 if (
                     clicked_piece is not None
                     and (row, col) != self.selected_square
-                    and (not self.turn_enforcement or clicked_piece.color == self.current_turn)
+                    and (not self.turn_enabled or clicked_piece.color == self.current_turn)
                 ):
                     # Switch selection to newly clicked piece of current turn
                     self.selected_square = (row, col)
@@ -271,10 +272,10 @@ class ChessBoardWidget(QWidget):
 class ChessWindow(QMainWindow):
     """Main application window hosting the chess board."""
 
-    def __init__(self) -> None:
+    def __init__(self, free_move: bool = False) -> None:
         super().__init__()
         self.setWindowTitle("Chess Game")
-        self.board_widget = ChessBoardWidget(self)
+        self.board_widget = ChessBoardWidget(self, free_move=free_move)
         self.setCentralWidget(self.board_widget)
 
         # Set a minimum window size respecting the widget's minimumSizeHint
@@ -284,8 +285,21 @@ class ChessWindow(QMainWindow):
 
 
 def main() -> None:
+    import argparse
+
+    # Activate signal handler so that Ctrl+C finishes the program
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+    parser = argparse.ArgumentParser(description="Chess game application")
+    parser.add_argument(
+        "--free-move",
+        action="store_true",
+        help="Disable turn enforcement to allow free movement of pieces.",
+    )
+    args, _ = parser.parse_known_args(sys.argv[1:])
+
     app = QApplication(sys.argv)
-    window = ChessWindow()
+    window = ChessWindow(free_move=args.free_move)
     window.show()
     sys.exit(app.exec())
 

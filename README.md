@@ -37,4 +37,7 @@ chess_project/
 python3 src/main.py
 # or
 python3 main.py
+
+# Free move mode (disables turn enforcement):
+python3 main.py --free-move
 ```
