@@ -117,3 +117,13 @@ def get_piece_pixmap(color: Any, piece_type: Any) -> QPixmap:
     if key in _master_sprites: return _master_sprites[key]
 
     raise ValueError(f"Unknown piece combination: color={color}, piece_type={piece_type}")
+
+
+def get_master_piece_pixmap(color: Any, piece_type: Any) -> QPixmap:
+    """Returns the original unscaled master sprite (640x640) for high-resolution graphics and scaling."""
+    key = _normalize_key(color, piece_type)
+    _ensure_master_sprites_loaded()
+    if key in _master_sprites:
+        return _master_sprites[key]
+    raise ValueError(f"Unknown piece combination: color={color}, piece_type={piece_type}")
+

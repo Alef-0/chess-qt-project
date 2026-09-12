@@ -4,16 +4,31 @@ import math
 import signal
 import sys
 from typing import List, Optional, Tuple
-from PyQt6.QtCore import QPointF, QRectF, QSize, Qt
+from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPen, QPolygonF, QResizeEvent
-from PyQt6.QtWidgets import QApplication, QMainWindow, QMessageBox, QWidget
+from PyQt6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 from pieces import BoardPieces, PieceColor, PieceType
 from check_mate import find_king, is_in_check, is_checkmate, get_legal_moves, move_leads_to_mate
 from promotion import prompt_promotion
+from menu import MainMenuWidget, TutorialDialog, CreditsDialog
 
 
 class ChessBoardWidget(QWidget):
     """Widget responsible for rendering a resizable 8x8 chessboard while maintaining aspect ratio."""
+
+    game_over_signal = pyqtSignal(str)
+    turn_changed = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None, free_move: bool = False) -> None:
         super().__init__(parent)
@@ -34,6 +49,21 @@ class ChessBoardWidget(QWidget):
         self.current_turn: PieceColor = PieceColor.WHITE
         self.turn_enabled: bool = not free_move
         self.game_over: bool = False
+
+    def reset_game(self, free_move: Optional[bool] = None) -> None:
+        """Resets board pieces, active selections, and turn state for a new game."""
+        self.pieces = BoardPieces()
+        _, _, square_size = self.get_board_geometry()
+        if square_size > 0:
+            self.pieces.update_size(max(1, round(square_size)))
+        self.selected_square = None
+        self.valid_moves = []
+        self.current_turn = PieceColor.WHITE
+        if free_move is not None:
+            self.turn_enabled = not free_move
+        self.game_over = False
+        self.turn_changed.emit(self.current_turn.name)
+        self.update()
 
     def get_board_geometry(self) -> Tuple[float, float, float]:
         """Calculates inner board top-left (inner_x, inner_y) and square_size for current dimensions."""
@@ -74,7 +104,7 @@ class ChessBoardWidget(QWidget):
         """Recalculates piece sprite dimensions to match the updated board geometry on window resize."""
         super().resizeEvent(event)
         _, _, square_size = self.get_board_geometry()
-        if square_size > 0:
+        if square_size >= 10:
             self.pieces.update_size(max(1, round(square_size)))
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
@@ -165,6 +195,7 @@ class ChessBoardWidget(QWidget):
                             self.update()
                             winner_name = winner.name if winner else "WHITE"
                             QMessageBox.information(self, "Game Over", f"{winner_name} WON")
+                            self.game_over_signal.emit(winner_name)
                             return
 
                 # Execute move to valid destination square
@@ -184,10 +215,12 @@ class ChessBoardWidget(QWidget):
                         self.game_over = True
                         self.update()
                         QMessageBox.information(self, "Game Over", f"{moving_piece.color.name} WON")
+                        self.game_over_signal.emit(moving_piece.color.name)
                         return
 
                 if self.turn_enabled:
                     self.current_turn = opp_color
+                    self.turn_changed.emit(self.current_turn.name)
                 self.update()
             else:
                 clicked_piece = self.pieces.get_piece(row, col)
@@ -355,18 +388,155 @@ class ChessBoardWidget(QWidget):
 
 
 class ChessWindow(QMainWindow):
-    """Main application window hosting the chess board."""
+    """Main application window hosting the main menu and the chess board."""
 
-    def __init__(self, free_move: bool = False) -> None:
+    def __init__(self, free_move: bool = False, start_in_menu: Optional[bool] = None) -> None:
         super().__init__()
-        self.setWindowTitle("Chess Game")
-        self.board_widget = ChessBoardWidget(self, free_move=free_move)
-        self.setCentralWidget(self.board_widget)
+        self.setWindowTitle("Chess Qt")
 
-        # Set a minimum window size respecting the widget's minimumSizeHint
-        self.setMinimumSize(self.board_widget.minimumSizeHint())
-        # Initial window size matching the widget's sizeHint
-        self.resize(self.board_widget.sizeHint())
+        # Central Stacked Widget
+        self.stack = QStackedWidget(self)
+        self.setCentralWidget(self.stack)
+
+        # 1. Main Menu Screen
+        self.menu_widget = MainMenuWidget(self)
+        self.menu_widget.turn_based_selected.connect(lambda: self.start_game(free_move=False))
+        self.menu_widget.free_move_selected.connect(lambda: self.start_game(free_move=True))
+        self.menu_widget.tutorial_selected.connect(self.show_tutorial)
+        self.menu_widget.credits_selected.connect(self.show_credits)
+        self.menu_widget.exit_selected.connect(self.close)
+        self.stack.addWidget(self.menu_widget)  # Index 0
+
+        # 2. Game Screen Container
+        self.game_container = QWidget(self)
+        self.game_container_layout = QVBoxLayout(self.game_container)
+        self.game_container_layout.setContentsMargins(0, 0, 0, 0)
+        self.game_container_layout.setSpacing(0)
+
+        # In-game Top Bar
+        self.top_bar = QFrame(self.game_container)
+        self.top_bar.setFixedHeight(46)
+        self.top_bar.setStyleSheet("""
+            QFrame {
+                background-color: #202026;
+                border-bottom: 2px solid #3d3d48;
+            }
+            QPushButton {
+                background-color: #2e2e38;
+                color: #f0f0f5;
+                border: 1px solid #484856;
+                border-radius: 6px;
+                padding: 6px 14px;
+                font-weight: bold;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #3f3f4c;
+                border-color: #d7cd64;
+                color: #ffffff;
+            }
+            QPushButton:pressed {
+                background-color: #1a1a20;
+            }
+            QLabel {
+                color: #d7cd64;
+                font-size: 13px;
+                font-weight: bold;
+            }
+        """)
+        top_bar_layout = QHBoxLayout(self.top_bar)
+        top_bar_layout.setContentsMargins(14, 5, 14, 5)
+
+        self.menu_btn = QPushButton("◀ Menu", self.top_bar)
+        self.menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.menu_btn.setToolTip("Return to Main Menu")
+        self.menu_btn.clicked.connect(self.return_to_menu)
+        top_bar_layout.addWidget(self.menu_btn)
+
+        top_bar_layout.addStretch()
+
+        self.status_label = QLabel(self.top_bar)
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        top_bar_layout.addWidget(self.status_label)
+
+        top_bar_layout.addStretch()
+
+        self.restart_btn = QPushButton("↺ Restart", self.top_bar)
+        self.restart_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.restart_btn.setToolTip("Restart match with current mode")
+        self.restart_btn.clicked.connect(self.restart_current_game)
+        top_bar_layout.addWidget(self.restart_btn)
+
+        self.game_container_layout.addWidget(self.top_bar)
+
+        # Chess Board Widget
+        self.board_widget = ChessBoardWidget(self.game_container, free_move=free_move)
+        self.board_widget.game_over_signal.connect(self.on_game_over)
+        self.board_widget.turn_changed.connect(self.on_turn_changed)
+        self.game_container_layout.addWidget(self.board_widget)
+
+        self.stack.addWidget(self.game_container)  # Index 1
+
+        self.is_free_move = free_move
+
+        # Set sizing
+        self.setMinimumSize(QSize(480, 540))
+        self.resize(QSize(660, 700))
+
+        if start_in_menu is None:
+            start_in_menu = not free_move
+
+        if start_in_menu:
+            self.show_menu()
+        else:
+            self.start_game(free_move=free_move)
+
+    def show_menu(self) -> None:
+        """Switches display to the main menu screen."""
+        self.stack.setCurrentWidget(self.menu_widget)
+
+    def return_to_menu(self) -> None:
+        """Returns from gameplay to the main menu."""
+        self.show_menu()
+
+    def start_game(self, free_move: bool = False) -> None:
+        """Initializes a fresh game with the chosen mode and switches to board view."""
+        self.is_free_move = free_move
+        self.board_widget.reset_game(free_move=free_move)
+        self._update_status_display()
+        self.stack.setCurrentWidget(self.game_container)
+
+    def restart_current_game(self) -> None:
+        """Restarts the board with the currently active mode."""
+        self.board_widget.reset_game(free_move=self.is_free_move)
+        self._update_status_display()
+
+    def on_turn_changed(self, turn_name: str) -> None:
+        """Updates the status bar when turn changes."""
+        self._update_status_display()
+
+    def _update_status_display(self) -> None:
+        """Updates status text in top bar."""
+        if self.is_free_move:
+            self.status_label.setText("⚡ Free Move Mode (Sandbox)")
+        else:
+            turn_str = self.board_widget.current_turn.name
+            icon = "⚪" if turn_str == "WHITE" else "⚫"
+            self.status_label.setText(f"⚔ Turn-Based Mode • {icon} {turn_str}'s Turn")
+
+    def on_game_over(self, winner: str) -> None:
+        """Re-opens the main menu when someone wins or loses."""
+        self.show_menu()
+
+    def show_tutorial(self) -> None:
+        """Displays the how-to-play tutorial dialog."""
+        dialog = TutorialDialog(self)
+        dialog.exec()
+
+    def show_credits(self) -> None:
+        """Displays the credits dialog."""
+        dialog = CreditsDialog(self)
+        dialog.exec()
 
 
 def main() -> None:
@@ -383,8 +553,8 @@ def main() -> None:
     )
     args, _ = parser.parse_known_args(sys.argv[1:])
 
-    app = QApplication(sys.argv)
-    window = ChessWindow(free_move=args.free_move)
+    app = QApplication.instance() or QApplication(sys.argv)
+    window = ChessWindow(free_move=args.free_move, start_in_menu=not args.free_move)
     window.show()
     sys.exit(app.exec())
 
