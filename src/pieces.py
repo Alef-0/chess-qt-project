@@ -29,6 +29,7 @@ class Piece:
     def __init__(self, color: PieceColor, piece_type: PieceType) -> None:
         self.color = color
         self.piece_type = piece_type
+        self.has_moved: bool = False
 
     @property
     def pixmap(self) -> QPixmap:
@@ -63,6 +64,7 @@ class BoardPieces:
         # 8x8 grid initialized to None
         self.grid: List[List[Optional[Piece]]] = [[None for _ in range(8)] for _ in range(8)]
         self.current_square_size: int = 0
+        self.en_passant_target: Optional[Tuple[int, int]] = None
         self.setup_initial_position()
 
     def update_size(self, square_size: int) -> None:
@@ -116,21 +118,157 @@ class BoardPieces:
         if 0 <= row < 8 and 0 <= col < 8:
             self.grid[row][col] = piece
 
+    def _apply_en_passant(
+        self, from_row: int, from_col: int, to_row: int, to_col: int, piece: Piece
+    ) -> Optional[Piece]:
+        """Executes an en passant pawn capture, removing the passed enemy pawn."""
+        captured = self.get_piece(from_row, to_col)
+        self.set_piece(from_row, to_col, None)
+        self.set_piece(to_row, to_col, piece)
+        self.set_piece(from_row, from_col, None)
+        return captured
+
+    def _apply_castling(
+        self, from_row: int, from_col: int, to_row: int, to_col: int, piece: Piece
+    ) -> Optional[Piece]:
+        """Executes castling by relocating both king and corresponding rook."""
+        self.set_piece(to_row, to_col, piece)
+        self.set_piece(from_row, from_col, None)
+        rook_col = 7 if to_col == 6 else 0
+        target_rook_col = 5 if to_col == 6 else 3
+        rook = self.get_piece(from_row, rook_col)
+        if rook is not None:
+            rook.has_moved = True
+            self.set_piece(from_row, target_rook_col, rook)
+            self.set_piece(from_row, rook_col, None)
+        return None
+
+    def _apply_normal_move(
+        self, from_row: int, from_col: int, to_row: int, to_col: int, piece: Piece
+    ) -> Optional[Piece]:
+        """Executes a standard move, capturing any piece on the target square."""
+        captured = self.get_piece(to_row, to_col)
+        self.set_piece(to_row, to_col, piece)
+        self.set_piece(from_row, from_col, None)
+        return captured
+
+    def _update_en_passant_target(
+        self, from_row: int, to_row: int, from_col: int, piece: Piece
+    ) -> None:
+        """Sets the skipped square on a 2-step pawn advance, or clears en passant state."""
+        if piece.piece_type == PieceType.PAWN and abs(to_row - from_row) == 2:
+            self.en_passant_target = ((from_row + to_row) // 2, from_col)
+        else:
+            self.en_passant_target = None
+
     def move_piece(self, from_row: int, from_col: int, to_row: int, to_col: int) -> Optional[Piece]:
         """Moves a piece from one square to another, returning any captured piece."""
         moving_piece = self.get_piece(from_row, from_col)
         if moving_piece is None:
             return None
-        captured = self.get_piece(to_row, to_col)
-        self.set_piece(to_row, to_col, moving_piece)
-        self.set_piece(from_row, from_col, None)
+
+        handlers = {
+            "en_passant": self._apply_en_passant,
+            "castling": self._apply_castling,
+            "normal": self._apply_normal_move,
+        }
+
+        category = self.get_move_category(from_row, from_col, to_row, to_col)
+        captured = handlers[category](from_row, from_col, to_row, to_col, moving_piece)
+
+        moving_piece.has_moved = True
+        self._update_en_passant_target(from_row, to_row, from_col, moving_piece)
+
         return captured
+
+    def _get_en_passant_moves(self, row: int, col: int) -> List[Tuple[int, int]]:
+        """Returns valid en passant capture target squares for a pawn at (row, col)."""
+        piece = self.get_piece(row, col)
+        if piece is None or piece.piece_type != PieceType.PAWN or self.en_passant_target is None:
+            return []
+
+        direction = -1 if piece.color == PieceColor.WHITE else 1
+        ep_row, ep_col = self.en_passant_target
+        if ep_row == row + direction and abs(ep_col - col) == 1:
+            # En passant strictly captures an opponent pawn on the adjacent square (row, ep_col)
+            target_pawn = self.get_piece(row, ep_col)
+            if (
+                target_pawn is not None
+                and target_pawn.piece_type == PieceType.PAWN
+                and target_pawn.color != piece.color
+            ):
+                return [(ep_row, ep_col)]
+
+        return []
+
+    def _get_castling_moves(self, row: int, col: int) -> List[Tuple[int, int]]:
+        """Returns valid castling destination squares for a king at (row, col).
+
+        Validates that neither king nor rook has moved, and intermediate squares are clear.
+        """
+        king = self.get_piece(row, col)
+        if king is None or king.piece_type != PieceType.KING or king.has_moved:
+            return []
+
+        expected_row = 7 if king.color == PieceColor.WHITE else 0
+        if row != expected_row or col != 4:
+            return []
+
+        moves: List[Tuple[int, int]] = []
+
+        # Kingside castling (col 4 -> col 6, rook at col 7)
+        kingside_rook = self.get_piece(row, 7)
+        if (
+            kingside_rook is not None
+            and kingside_rook.piece_type == PieceType.ROOK
+            and kingside_rook.color == king.color
+            and not kingside_rook.has_moved
+        ):
+            if self.get_piece(row, 5) is None and self.get_piece(row, 6) is None:
+                moves.append((row, 6))
+
+        # Queenside castling (col 4 -> col 2, rook at col 0)
+        queenside_rook = self.get_piece(row, 0)
+        if (
+            queenside_rook is not None
+            and queenside_rook.piece_type == PieceType.ROOK
+            and queenside_rook.color == king.color
+            and not queenside_rook.has_moved
+        ):
+            if (
+                self.get_piece(row, 1) is None
+                and self.get_piece(row, 2) is None
+                and self.get_piece(row, 3) is None
+            ):
+                moves.append((row, 2))
+
+        return moves
+
+    def get_move_category(self, from_row: int, from_col: int, to_row: int, to_col: int) -> str:
+        """Returns the category for a move: 'en_passant', 'castling', or 'normal'."""
+        piece = self.get_piece(from_row, from_col)
+        if piece is None:
+            return "normal"
+        if (
+            piece.piece_type == PieceType.PAWN
+            and self.en_passant_target is not None
+            and (to_row, to_col) == self.en_passant_target
+        ):
+            target_pawn = self.get_piece(from_row, to_col)
+            if (
+                target_pawn is not None
+                and target_pawn.piece_type == PieceType.PAWN
+                and target_pawn.color != piece.color
+            ):
+                return "en_passant"
+        if piece.piece_type == PieceType.KING and abs(to_col - from_col) == 2:
+            return "castling"
+        return "normal"
 
     def get_valid_moves(self, row: int, col: int) -> List[Tuple[int, int]]:
         """Returns a list of valid destination coordinates (target_row, target_col) for the piece at (row, col).
 
-        Implements standard piece moves with blocking and captures. Excludes complex
-        rules (no en passant, no castling, no checks, no promotion).
+        Implements standard piece moves with blocking, captures, en passant, and castling.
         """
         piece = self.get_piece(row, col)
         if piece is None:
@@ -151,7 +289,7 @@ class BoardPieces:
                 if row == start_row and 0 <= fwd2_row < 8 and self.get_piece(fwd2_row, col) is None:
                     moves.append((fwd2_row, col))
 
-            # Diagonal captures (must contain enemy piece)
+            # Diagonal captures (standard enemy piece)
             for dc in (-1, 1):
                 cap_row = row + direction
                 cap_col = col + dc
@@ -159,6 +297,9 @@ class BoardPieces:
                     target = self.get_piece(cap_row, cap_col)
                     if target is not None and target.color != piece.color:
                         moves.append((cap_row, cap_col))
+
+            # En passant capture (via dedicated helper function)
+            moves.extend(self._get_en_passant_moves(row, col))
 
         elif piece.piece_type == PieceType.ROOK:
             directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
@@ -201,6 +342,9 @@ class BoardPieces:
                     target = self.get_piece(r, c)
                     if target is None or target.color != piece.color:
                         moves.append((r, c))
+
+            # Castling moves (via dedicated helper function)
+            moves.extend(self._get_castling_moves(row, col))
 
         return moves
 

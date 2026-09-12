@@ -1,11 +1,12 @@
 """Chess board implementation using PyQt6."""
 
+import math
 import sys
 from typing import List, Optional, Tuple
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt
-from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPen, QResizeEvent
+from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPen, QPolygonF, QResizeEvent
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget
-from pieces import BoardPieces
+from pieces import BoardPieces, PieceColor
 
 
 class ChessBoardWidget(QWidget):
@@ -25,6 +26,10 @@ class ChessBoardWidget(QWidget):
         # Selection and movement state
         self.selected_square: Optional[Tuple[int, int]] = None
         self.valid_moves: List[Tuple[int, int]] = []
+
+        # Turn management
+        self.current_turn: PieceColor = PieceColor.WHITE
+        self.turn_enforcement: bool = True
 
     def get_board_geometry(self) -> Tuple[float, float, float]:
         """Calculates inner board top-left (inner_x, inner_y) and square_size for current dimensions."""
@@ -94,9 +99,11 @@ class ChessBoardWidget(QWidget):
     def handle_square_clicked(self, row: int, col: int) -> None:
         """Processes a click on square (row, col) to select, move, or switch piece."""
         if self.selected_square is None:
-            # Select piece if present
+            # Select piece if present and belongs to current turn
             piece = self.pieces.get_piece(row, col)
             if piece is not None:
+                if self.turn_enforcement and piece.color != self.current_turn:
+                    return
                 self.selected_square = (row, col)
                 self.valid_moves = self.pieces.get_valid_moves(row, col)
                 self.update()
@@ -107,16 +114,24 @@ class ChessBoardWidget(QWidget):
                 self.pieces.move_piece(sel_row, sel_col, row, col)
                 self.selected_square = None
                 self.valid_moves = []
+                if self.turn_enforcement:
+                    self.current_turn = (
+                        PieceColor.BLACK if self.current_turn == PieceColor.WHITE else PieceColor.WHITE
+                    )
                 self.update()
             else:
                 clicked_piece = self.pieces.get_piece(row, col)
-                if clicked_piece is not None and (row, col) != self.selected_square:
-                    # Switch selection to newly clicked piece
+                if (
+                    clicked_piece is not None
+                    and (row, col) != self.selected_square
+                    and (not self.turn_enforcement or clicked_piece.color == self.current_turn)
+                ):
+                    # Switch selection to newly clicked piece of current turn
                     self.selected_square = (row, col)
                     self.valid_moves = self.pieces.get_valid_moves(row, col)
                     self.update()
                 else:
-                    # Clicked invalid empty square or same square -> deselect
+                    # Clicked invalid empty square, opponent piece, or same square -> deselect
                     self.selected_square = None
                     self.valid_moves = []
                     self.update()
@@ -168,32 +183,89 @@ class ChessBoardWidget(QWidget):
         # Draw pieces on top of the squares
         self.pieces.draw(painter, inner_x, inner_y, square_size)
 
-        # Draw light gray dots for valid move target squares
-        if self.valid_moves:
+        # Draw light gray dots and special category arrows for valid move target squares
+        if self.valid_moves and self.selected_square is not None:
+            sel_row, sel_col = self.selected_square
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             for m_row, m_col in self.valid_moves:
                 center_x = inner_x + (m_col + 0.5) * square_size
                 center_y = inner_y + (m_row + 0.5) * square_size
-                target_piece = self.pieces.get_piece(m_row, m_col)
+                category = self.pieces.get_move_category(sel_row, sel_col, m_row, m_col)
 
-                if target_piece is None:
-                    # Empty square: solid light gray dot
-                    dot_radius = square_size * 0.16
-                    painter.setPen(Qt.PenStyle.NoPen)
-                    painter.setBrush(QColor(170, 170, 170, 200))
-                    painter.drawEllipse(QPointF(center_x, center_y), dot_radius, dot_radius)
+                if category in ("en_passant", "castling"):
+                    # Special category moves: signified by an arrow
+                    self._draw_move_arrow(
+                        painter, sel_row, sel_col, m_row, m_col, center_x, center_y, square_size
+                    )
                 else:
-                    # Capture square: light gray dot with outline and ring for high visibility over pieces
-                    ring_radius = square_size * 0.42
-                    pen_width = max(2.0, square_size * 0.07)
-                    painter.setBrush(Qt.BrushStyle.NoBrush)
-                    painter.setPen(QPen(QColor(190, 190, 190, 210), pen_width))
-                    painter.drawEllipse(QPointF(center_x, center_y), ring_radius, ring_radius)
+                    target_piece = self.pieces.get_piece(m_row, m_col)
+                    if target_piece is None:
+                        # Empty square: solid light gray dot
+                        dot_radius = square_size * 0.16
+                        painter.setPen(Qt.PenStyle.NoPen)
+                        painter.setBrush(QColor(170, 170, 170, 200))
+                        painter.drawEllipse(QPointF(center_x, center_y), dot_radius, dot_radius)
+                    else:
+                        # Capture square: light gray dot with outline and ring for high visibility over pieces
+                        ring_radius = square_size * 0.42
+                        pen_width = max(2.0, square_size * 0.07)
+                        painter.setBrush(Qt.BrushStyle.NoBrush)
+                        painter.setPen(QPen(QColor(190, 190, 190, 210), pen_width))
+                        painter.drawEllipse(QPointF(center_x, center_y), ring_radius, ring_radius)
 
-                    dot_radius = square_size * 0.18
-                    painter.setPen(QPen(QColor(40, 40, 40, 160), max(1.5, square_size * 0.025)))
-                    painter.setBrush(QColor(210, 210, 210, 230))
-                    painter.drawEllipse(QPointF(center_x, center_y), dot_radius, dot_radius)
+                        dot_radius = square_size * 0.18
+                        painter.setPen(QPen(QColor(40, 40, 40, 160), max(1.5, square_size * 0.025)))
+                        painter.setBrush(QColor(210, 210, 210, 230))
+                        painter.drawEllipse(QPointF(center_x, center_y), dot_radius, dot_radius)
+
+    def _draw_move_arrow(
+        self,
+        painter: QPainter,
+        from_row: int,
+        from_col: int,
+        to_row: int,
+        to_col: int,
+        center_x: float,
+        center_y: float,
+        square_size: float,
+    ) -> None:
+        """Renders an arrow indicator denoting special category moves (en passant, castling)."""
+        dy = (to_row - from_row) * square_size
+        dx = (to_col - from_col) * square_size
+        angle_deg = math.degrees(math.atan2(dy, dx))
+
+        painter.save()
+        painter.translate(center_x, center_y)
+        painter.rotate(angle_deg)
+
+        # Arrow geometry pointing along +X (towards destination)
+        length = square_size * 0.44
+        head_width = square_size * 0.32
+        head_length = square_size * 0.22
+        shaft_width = square_size * 0.13
+
+        half_len = length / 2.0
+        half_shaft = shaft_width / 2.0
+        half_head = head_width / 2.0
+        junction_x = half_len - head_length
+
+        points = [
+            QPointF(-half_len, -half_shaft),
+            QPointF(junction_x, -half_shaft),
+            QPointF(junction_x, -half_head),
+            QPointF(half_len, 0.0),
+            QPointF(junction_x, half_head),
+            QPointF(junction_x, half_shaft),
+            QPointF(-half_len, half_shaft),
+        ]
+        polygon = QPolygonF(points)
+
+        # Draw anti-aliased light gray arrow with dark outline
+        painter.setBrush(QColor(200, 200, 200, 230))
+        painter.setPen(QPen(QColor(50, 50, 50, 180), max(1.5, square_size * 0.03)))
+        painter.drawPolygon(polygon)
+
+        painter.restore()
 
 
 class ChessWindow(QMainWindow):

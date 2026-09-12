@@ -266,3 +266,266 @@ class TestBoardWidgetInteraction:
         widget.handle_square_clicked(3, 4)
         assert widget.selected_square is None
         assert widget.valid_moves == []
+
+
+class TestEnPassantMovement:
+    def test_white_en_passant_capture(self):
+        board = create_empty_board()
+        # White pawn on rank 5 (row 3, col 4: e5)
+        board.set_piece(3, 4, Piece(PieceColor.WHITE, PieceType.PAWN))
+        # Black pawn on rank 7 (row 1, col 3: d7)
+        board.set_piece(1, 3, Piece(PieceColor.BLACK, PieceType.PAWN))
+
+        # Black advances d7 to d5 (row 1, col 3 -> row 3, col 3)
+        board.move_piece(1, 3, 3, 3)
+        assert board.en_passant_target == (2, 3)
+
+        # White e5 pawn should have en passant move to (2, 3) in addition to (2, 4)
+        moves = board.get_valid_moves(3, 4)
+        assert (2, 3) in moves
+        assert (2, 4) in moves
+
+        # White captures en passant
+        captured = board.move_piece(3, 4, 2, 3)
+        assert captured is not None
+        assert captured.color == PieceColor.BLACK
+        assert captured.piece_type == PieceType.PAWN
+        # Black pawn at (3, 3) must be gone!
+        assert board.get_piece(3, 3) is None
+        # White pawn is now on (2, 3)
+        assert board.get_piece(2, 3) is not None
+        assert board.get_piece(2, 3).color == PieceColor.WHITE
+        # en_passant_target is cleared
+        assert board.en_passant_target is None
+
+    def test_black_en_passant_capture(self):
+        board = create_empty_board()
+        # Black pawn on rank 4 (row 4, col 3: d4)
+        board.set_piece(4, 3, Piece(PieceColor.BLACK, PieceType.PAWN))
+        # White pawn on rank 2 (row 6, col 4: e2)
+        board.set_piece(6, 4, Piece(PieceColor.WHITE, PieceType.PAWN))
+
+        # White advances e2 to e4 (row 6, col 4 -> row 4, col 4)
+        board.move_piece(6, 4, 4, 4)
+        assert board.en_passant_target == (5, 4)
+
+        # Black d4 pawn can capture en passant to (5, 4)
+        moves = board.get_valid_moves(4, 3)
+        assert (5, 4) in moves
+
+        # Black captures en passant
+        captured = board.move_piece(4, 3, 5, 4)
+        assert captured is not None
+        assert captured.color == PieceColor.WHITE
+        assert captured.piece_type == PieceType.PAWN
+        assert board.get_piece(4, 4) is None
+        assert board.get_piece(5, 4).color == PieceColor.BLACK
+        assert board.en_passant_target is None
+
+    def test_en_passant_expires_after_other_move(self):
+        board = create_empty_board()
+        board.set_piece(3, 4, Piece(PieceColor.WHITE, PieceType.PAWN))  # White e5
+        board.set_piece(1, 3, Piece(PieceColor.BLACK, PieceType.PAWN))  # Black d7
+        board.set_piece(0, 0, Piece(PieceColor.BLACK, PieceType.ROOK))  # Black a8
+
+        # Black advances d7 to d5
+        board.move_piece(1, 3, 3, 3)
+        assert board.en_passant_target == (2, 3)
+
+        # Black makes another move (e.g. rook moves a8 to b8)
+        board.move_piece(0, 0, 0, 1)
+        # en passant target is expired!
+        assert board.en_passant_target is None
+
+        # White e5 pawn can NO LONGER capture en passant
+        moves = board.get_valid_moves(3, 4)
+        assert (2, 3) not in moves
+
+    def test_widget_en_passant_click_interaction(self, qapp):
+        widget = ChessBoardWidget()
+        # 1. White plays e2-e4
+        widget.handle_square_clicked(6, 4)
+        widget.handle_square_clicked(4, 4)
+        # 2. Black plays a7-a6
+        widget.handle_square_clicked(1, 0)
+        widget.handle_square_clicked(2, 0)
+        # 3. White plays e4-e5
+        widget.handle_square_clicked(4, 4)
+        widget.handle_square_clicked(3, 4)
+        # 4. Black plays d7-d5 (2 squares next to White e5 pawn)
+        widget.handle_square_clicked(1, 3)
+        widget.handle_square_clicked(3, 3)
+
+        # 5. White selects e5 pawn
+        widget.handle_square_clicked(3, 4)
+        assert (2, 3) in widget.valid_moves  # En passant target d6
+
+        # 6. White clicks d6 to execute en passant
+        widget.handle_square_clicked(2, 3)
+
+        # Black d5 pawn must be captured
+        assert widget.pieces.get_piece(3, 3) is None
+        # White pawn must be on d6 (row 2, col 3)
+        pawn = widget.pieces.get_piece(2, 3)
+        assert pawn is not None
+        assert pawn.color == PieceColor.WHITE
+        assert pawn.piece_type == PieceType.PAWN
+
+
+class TestCastlingMovement:
+    def test_white_kingside_and_queenside_castling(self):
+        board = create_empty_board()
+        board.set_piece(7, 4, Piece(PieceColor.WHITE, PieceType.KING))
+        board.set_piece(7, 7, Piece(PieceColor.WHITE, PieceType.ROOK)) # Kingside rook
+        board.set_piece(7, 0, Piece(PieceColor.WHITE, PieceType.ROOK)) # Queenside rook
+
+        moves = set(board.get_valid_moves(7, 4))
+        # Both castling moves should be available: (7, 6) and (7, 2)
+        assert (7, 6) in moves
+        assert (7, 2) in moves
+
+        # Execute kingside castle
+        board.move_piece(7, 4, 7, 6)
+        # King is at (7, 6)
+        assert board.get_piece(7, 6).piece_type == PieceType.KING
+        assert board.get_piece(7, 4) is None
+        # Rook is at (7, 5)
+        assert board.get_piece(7, 5).piece_type == PieceType.ROOK
+        assert board.get_piece(7, 7) is None
+
+    def test_white_queenside_castling_execution(self):
+        board = create_empty_board()
+        board.set_piece(7, 4, Piece(PieceColor.WHITE, PieceType.KING))
+        board.set_piece(7, 0, Piece(PieceColor.WHITE, PieceType.ROOK))
+
+        moves = set(board.get_valid_moves(7, 4))
+        assert (7, 2) in moves
+
+        board.move_piece(7, 4, 7, 2)
+        # King at (7, 2)
+        assert board.get_piece(7, 2).piece_type == PieceType.KING
+        assert board.get_piece(7, 4) is None
+        # Rook at (7, 3)
+        assert board.get_piece(7, 3).piece_type == PieceType.ROOK
+        assert board.get_piece(7, 0) is None
+
+    def test_black_castling(self):
+        board = create_empty_board()
+        board.set_piece(0, 4, Piece(PieceColor.BLACK, PieceType.KING))
+        board.set_piece(0, 7, Piece(PieceColor.BLACK, PieceType.ROOK))
+        board.set_piece(0, 0, Piece(PieceColor.BLACK, PieceType.ROOK))
+
+        moves = set(board.get_valid_moves(0, 4))
+        assert (0, 6) in moves
+        assert (0, 2) in moves
+
+        # Execute black kingside castle
+        board.move_piece(0, 4, 0, 6)
+        assert board.get_piece(0, 6).piece_type == PieceType.KING
+        assert board.get_piece(0, 5).piece_type == PieceType.ROOK
+        assert board.get_piece(0, 7) is None
+
+    def test_castling_blocked_by_pieces(self):
+        board = create_empty_board()
+        board.set_piece(7, 4, Piece(PieceColor.WHITE, PieceType.KING))
+        board.set_piece(7, 7, Piece(PieceColor.WHITE, PieceType.ROOK))
+        # Place a bishop between King and Kingside Rook
+        board.set_piece(7, 5, Piece(PieceColor.WHITE, PieceType.BISHOP))
+
+        moves = board.get_valid_moves(7, 4)
+        assert (7, 6) not in moves
+
+    def test_castling_prevented_if_king_has_moved(self):
+        board = create_empty_board()
+        king = Piece(PieceColor.WHITE, PieceType.KING)
+        board.set_piece(7, 4, king)
+        board.set_piece(7, 7, Piece(PieceColor.WHITE, PieceType.ROOK))
+
+        king.has_moved = True
+        moves = board.get_valid_moves(7, 4)
+        assert (7, 6) not in moves
+
+    def test_castling_prevented_if_rook_has_moved(self):
+        board = create_empty_board()
+        board.set_piece(7, 4, Piece(PieceColor.WHITE, PieceType.KING))
+        rook = Piece(PieceColor.WHITE, PieceType.ROOK)
+        board.set_piece(7, 7, rook)
+
+        rook.has_moved = True
+        moves = board.get_valid_moves(7, 4)
+        assert (7, 6) not in moves
+
+    def test_widget_castling_interaction(self, qapp):
+        widget = ChessBoardWidget()
+        # Clear out pieces between e1 king and h1 rook (f1 bishop, g1 knight)
+        widget.pieces.set_piece(7, 5, None)
+        widget.pieces.set_piece(7, 6, None)
+
+        # Select King at e1 (7, 4)
+        widget.handle_square_clicked(7, 4)
+        assert (7, 6) in widget.valid_moves
+
+        # Click g1 (7, 6) to castle kingside
+        widget.handle_square_clicked(7, 6)
+
+        # King should now be at g1 (7, 6) and Rook at f1 (7, 5)
+        assert widget.pieces.get_piece(7, 6).piece_type == PieceType.KING
+        assert widget.pieces.get_piece(7, 5).piece_type == PieceType.ROOK
+        assert widget.pieces.get_piece(7, 7) is None
+
+
+class TestMoveCategories:
+    def test_move_category_classification(self):
+        board = create_empty_board()
+        board.set_piece(7, 4, Piece(PieceColor.WHITE, PieceType.KING))
+        board.set_piece(7, 7, Piece(PieceColor.WHITE, PieceType.ROOK))
+        board.set_piece(3, 4, Piece(PieceColor.WHITE, PieceType.PAWN))
+        # Place opponent pawn that was double-stepped
+        board.set_piece(3, 3, Piece(PieceColor.BLACK, PieceType.PAWN))
+        board.en_passant_target = (2, 3)
+
+        assert board.get_move_category(7, 4, 7, 6) == "castling"
+        assert board.get_move_category(7, 4, 6, 4) == "normal"
+        assert board.get_move_category(3, 4, 2, 3) == "en_passant"
+        assert board.get_move_category(3, 4, 2, 4) == "normal"
+
+    def test_same_color_pawn_cannot_en_passant(self):
+        board = BoardPieces()
+        # White moves e2 to e4 (6, 4 -> 4, 4)
+        board.move_piece(6, 4, 4, 4)
+        assert board.en_passant_target == (5, 4)
+
+        # White d2 pawn (6, 3) must NOT have (5, 4) in valid moves
+        white_d2_moves = board.get_valid_moves(6, 3)
+        assert (5, 4) not in white_d2_moves
+        assert board.get_move_category(6, 3, 5, 4) == "normal"
+
+    def test_turn_enforcement_in_widget(self, qapp):
+        widget = ChessBoardWidget()
+        assert widget.current_turn == PieceColor.WHITE
+
+        # Try to select black pawn at (1, 3) on White's turn -> should not select
+        widget.handle_square_clicked(1, 3)
+        assert widget.selected_square is None
+        assert widget.valid_moves == []
+
+        # Select and move white pawn at (6, 4) -> (4, 4)
+        widget.handle_square_clicked(6, 4)
+        assert widget.selected_square == (6, 4)
+        widget.handle_square_clicked(4, 4)
+        assert widget.selected_square is None
+        # Now it is Black's turn
+        assert widget.current_turn == PieceColor.BLACK
+
+        # White piece cannot move on Black's turn
+        widget.handle_square_clicked(6, 3)
+        assert widget.selected_square is None
+
+        # Black can move on Black's turn
+        widget.handle_square_clicked(1, 3)
+        assert widget.selected_square == (1, 3)
+        widget.handle_square_clicked(3, 3)
+        assert widget.selected_square is None
+        # Back to White's turn
+        assert widget.current_turn == PieceColor.WHITE
+
